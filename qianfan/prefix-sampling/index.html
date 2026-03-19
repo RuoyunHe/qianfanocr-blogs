@@ -1,0 +1,617 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Prefix Sampling | Baidu AI Cloud</title>
+  <meta name="description" content="Prefix Sampling blog">
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body>
+  <main class="main-content">
+    <div class="container">
+      
+<section class="hero-section">
+  <h1 class="hero-title">Prefix Sampling</h1>
+  <p class="hero-subtitle">Targeting 50% Rollout Pass Rate for More Efficient Agentic RL</p>
+  <div class="hero-meta">Tianshu Zhu, Wenyu Zhang, Lun Tian, Haotian Zhao, Haifeng Zhang, Ruijie Xu, Yuxin Zhang, Jingnan Gu*, Daxiang Dong*, Jianmin Wu*</div>
+  <div class="hero-meta">Published on March 17, 2026 | Baidu AI Cloud Qianfan</div>
+  <div class="language-switch"><a href="index_zh.html">中文</a> | English</div>
+</section>
+<section class="table-of-contents section" style="background: #f8f9fa; padding: 1.5rem; border-radius: 8px; margin: 1.5rem 0;">
+  <div>
+    <h2 style="font-size: 1.3rem; margin-bottom: 1rem;">Table of Contents</h2>
+    <div id="article-toc"></div>
+  </div>
+</section>
+<section class="section">
+  <div class="article">
+    <a class="back-link" href="../index_en.html">← Back to Qianfan Research</a>
+<h2>TL;DR</h2>
+<div style="display: flex; gap: 16px; margin-bottom: 12px;">
+  <a class="zoomable-image" href="figures/qwen3_14b_ps_vs_baseline_1to1_repro_v2.png" style="width: 50%;"><img src="figures/qwen3_14b_ps_vs_baseline_1to1_repro_v2.png" alt="Qwen3-14B SWE-bench Verified Comparison"></a>
+  <a class="zoomable-image" href="figures/qwen3_32b_ps_vs_baseline_1to1_repro_max_table6.png" style="width: 50%;"><img src="figures/qwen3_32b_ps_vs_baseline_1to1_repro_max_table6.png" alt="Qwen3-32B SWE-bench Verified Comparison"></a>
+</div>
+
+<p><em>Figure 1. Left: Qwen3-14B SWE-bench Verified pass@1 score over training steps, averaged over 3 runs. PS reaches the baseline's peak score 1.8x faster and ultimately reaches 0.298 vs 0.273. Right: Qwen3-32B SWE-bench Verified pass@1 score over training steps, averaged over 3 runs. PS reaches the baseline's best score of 0.422 at step 290, while baseline reaches the same score at step 410.</em></p>
+<p>Reinforcement learning (RL) for coding agents wastes a large fraction of compute on tasks with skewed rollout pass rates.<br />
+When the model almost always fails or almost always succeeds, the gradient signal is weak and biased. <strong>50% rollout pass rate maximizes gradient signal</strong> — that's the target.</p>
+<p><strong>Prefix Sampling (PS) is the most direct way to hit that 50% target</strong>: it replays trajectory prefixes to shift each task's effective rollout pass rate toward 50% — the information-theoretic optimum for binary-reward RL. For mostly-failing tasks, PS gives the model a head start from a rare successful trajectory. For mostly-passing tasks, it imposes a handicap from a rare failing trajectory. In both cases, biased signal is converted into balanced, high-information signal.</p>
+<p>On Qwen3-14B (SWE-bench, R2E_Gym), averaged over 3 runs, PS is <strong>~2.07x faster end-to-end</strong> to reach the same SWE-bench Verified pass@1 score (1.80x fewer steps × 1.15x faster per step), and ultimately achieves a higher final pass@1 score: <strong>0.298</strong> vs <strong>0.273</strong> for baseline — a quality improvement with no trade-off.</p>
+<p>On Qwen3-32B (SWE-bench, R2E_Gym), averaged over 3 runs, PS is <strong>~1.54x faster end-to-end</strong> to reach the same SWE-bench Verified pass@1 score (1.40x fewer steps × 1.10x faster per step), <strong>without sacrificing performance</strong>.</p>
+<h2>Most RL Tasks Have the Wrong Rollout Pass Rate</h2>
+<p>In our SWE-bench RL training setup (Qwen3-14B, N=8 rollouts per task, batch_size=64), we observe that tasks fall into several categories with very different learning efficiency:</p>
+<ul>
+<li><strong>All fail</strong> (0/8 rollout pass rate): The model can't solve the task at all. Zero gradient signal. Discarded by rejection sampling.</li>
+<li><strong>All pass</strong> (8/8 rollout pass rate): The model solves it every time. Zero gradient signal. Also discarded.</li>
+<li><strong>Heavily skewed</strong> (1/8, 2/8, 6/8, 7/8): Technically nonzero signal, but heavily biased — the few outlier trajectories carry all the information, and the advantage estimates are noisy and inefficient. These tasks <em>do</em> contribute to training, but far below their potential.</li>
+<li><strong>Balanced</strong> (3/8, 4/8, 5/8): The sweet spot. Roughly balanced positive and negative rollouts produce strong, contrastive gradient signal.</li>
+</ul>
+<p>The standard mitigation is <strong>rejection sampling</strong>: discard tasks with 0% or 100% rollout pass rate.<br />
+But this only addresses the extreme cases. In our baseline training, only ~26 out of 64 tasks per batch have partial rollout pass rates (the <code>solve_partial</code> metric), and many of those are still heavily skewed.<br />
+Result: a large fraction of compute produces weak learning signal. The root cause: most tasks are far from the 50% rollout pass rate that maximizes gradient signal.</p>
+<p><strong>The key insight behind Prefix Sampling:</strong> we cannot rescue all-fail or all-pass tasks, because there is no successful or failing trajectory to reuse.<br />
+But we <em>can</em> recycle heavily skewed tasks (for example 1/8 or 7/8 rollout pass rate) by replaying a trajectory prefix to shift effective difficulty.<br />
+For mostly failing tasks, replay a rare successful prefix as a head start, pushing rollout pass rate toward 50%. For mostly passing tasks, replay a rare failing prefix as a handicap, making success non-trivial again.<br />
+In both cases, low-quality biased signal is turned into balanced, information-rich signal.</p>
+<h2>Why 50% Rollout Pass Rate Is the Optimal Target</h2>
+<p>The key conclusion comes first: for binary-reward RL, <strong>50% rollout pass rate is the optimal target</strong>. It maximizes information, maximizes GRPO signal strength, and gives the richest contrastive structure for credit assignment.<br />
+We give the full mathematical argument later in the post, right before <code>Citation</code>.</p>
+<p><strong>Reader shortcut (conclusion first):</strong><br />
+- Information (<code>H(p)</code>), GRPO signal strength (<code>p(1-p)</code>), and contrastive structure (<code>k(N-k)</code>) all peak at <code>p=0.5</code>.<br />
+- Skewed tasks (for example <code>1/8</code> or <code>7/8</code>) still train, but with substantially lower sample efficiency.<br />
+- Prefix Sampling improves efficiency by shifting skewed tasks toward this high-signal regime.</p>
+<h2>How Prefix Sampling Steers Tasks to 50%</h2>
+<h3>Overview</h3>
+<p><img alt="Prefix Sampling Workflow" src="figures/workflow.png" /></p>
+<p><em>Figure 2. The Prefix Sampling workflow. Each batch mixes fresh tasks and prefix tasks. Tasks are classified by rollout pass rate into five categories; too-hard and too-easy tasks are recycled via prefix replay into the next batch.</em></p>
+<p>The figure above shows the complete Prefix Sampling workflow.<br />
+At each training step, a mixed batch is assembled from two sources: fresh dataloader tasks and prefix tasks collected from previous steps.<br />
+Each task runs N rollouts with <strong>prefix replay</strong>. Fresh tasks start from scratch, while prefix tasks start from a restored environment state.<br />
+Based on rollout pass rate, each task follows one of five paths:</p>
+<p><strong>All-Fail (0%)</strong>: All N rollouts fail. No successful trajectory exists to construct a prefix from. These tasks are discarded via rejection sampling.</p>
+<p><strong>All-Pass (100%)</strong>: All N rollouts pass. No failing trajectory exists. Also discarded.</p>
+<p><strong>Normal (30%-70%)</strong>: Pass rate is balanced — some rollouts pass, some fail. These tasks proceed directly to RL training. The gradient signal is already high-quality; no prefix intervention needed.</p>
+<p><strong>Too-Easy (70%-100%)</strong>: Most rollouts pass, but at least one fails. Original rollouts are trained on, but additionally, one failing trajectory is saved and sent to <strong>Prefix &amp; Mask</strong>. Using <strong>prefix selection</strong>, a portion of the failing trajectory is selected as a prefix. Using <strong>adaptive prefix</strong> control, the prefix length is calibrated to target 50% rollout pass rate. The selected prefix is masked during training, while the discarded portion is dropped. This prefix task is injected back into the next batch, where it will be replayed with the failing prefix as a "handicap."</p>
+<p><strong>Too-Hard (0%-30%)</strong>: Most rollouts fail, but at least one passes. Original rollouts are trained on, and one successful trajectory is saved and sent to <strong>Prefix &amp; Mask</strong>. A portion of the successful trajectory becomes the prefix, giving the model a "head start" when replayed in the next batch.</p>
+<p>In short:<br />
+- <strong>Discard:</strong> all-fail and all-pass tasks (standard rejection sampling).<br />
+- <strong>RL Train:</strong> normal tasks (already balanced).<br />
+- <strong>Prefix &amp; Mask:</strong> too-hard and too-easy tasks go through prefix replay to rebalance rollout pass rate before being injected back into the next batch.</p>
+<p>The key mechanism: <strong>prefix replay</strong> restores environment state from saved trajectories, <strong>prefix selection</strong> determines how much to replay, <strong>prefix masking</strong> excludes prefix tokens from gradients, and <strong>adaptive prefix</strong> control maintains ~50% rollout pass rate. Tasks with skewed rollout pass rates are converted into more informative training samples through this prefix-guided replay loop.</p>
+<h3>Prefix Replay</h3>
+<p>What does it mean to "replay a prefix" in a multi-turn coding agent environment?</p>
+<p>Unlike single-turn reasoning tasks where a prefix is simply prepended text, SWE-bench trajectories involve stateful interactions: the agent reads files, edits code, runs tests, and maintains conversation history. Replaying a prefix means <strong>restoring the full environment state</strong> at a specific step in a saved trajectory:</p>
+<ol>
+<li><strong>Code state</strong>: All file edits made up to step K are applied to the repository</li>
+<li><strong>Conversation history</strong>: The full dialogue (user messages, agent responses, tool outputs) up to step K is loaded</li>
+<li><strong>Execution context</strong>: The agent is positioned exactly where the prefix trajectory left off</li>
+</ol>
+<p>From this restored state, the model generates new continuations — making its own decisions about what to do next. The prefix is not a target of credit assignment; it is purely the <em>starting condition</em> for a new rollout. That distinction is important because Prefix Sampling is meant to improve RL training signal, not to assign reward or blame to actions copied from an earlier trajectory.</p>
+<h3>Prefix Selection</h3>
+<p>Which trajectory and how much of it to replay?</p>
+<ul>
+<li><strong>Too hard tasks → Successful prefix:</strong> Replay the first K steps of a rare successful trajectory, giving the model a "head start." This increases the rollout pass rate toward 50%.</li>
+<li><strong>Too easy tasks → Failing prefix:</strong> Replay the first K steps of a rare failing trajectory, giving the model a "handicap." This decreases the rollout pass rate toward 50%.</li>
+</ul>
+<p>The prefix length K is parameterized by a <strong>ratio</strong> and a <strong>cap</strong>:</p>
+<p><strong>Too hard (remaining steps mode):</strong></p>
+<pre><code>remaining = min(int(total_steps × remaining_ratio), remaining_cap)
+target_step = total_steps - remaining
+</code></pre>
+<p>With <code>remaining_ratio=0.25</code>, a 20-step trajectory replays 15 steps and the model completes the last 5 on its own.</p>
+<p><strong>Too easy (prefix steps mode):</strong></p>
+<pre><code>target_step = min(int(total_steps × prefix_ratio), prefix_cap)
+</code></pre>
+<p>With <code>prefix_ratio=0.25</code>, a 20-step trajectory replays the first 5 steps of a failing trajectory.</p>
+<p>The cap prevents extremely long prefixes in very long trajectories.</p>
+<p>In practice, fixed ratios of <code>prefix_ratio=0.25</code> and <code>remaining_ratio=0.25</code> work reasonably well across different tasks and model capabilities.</p>
+<h3>Prefix Masking</h3>
+<p>A critical design choice: <strong>prefix tokens are excluded from gradient updates.</strong> During training, the response mask is set to zero for all tokens in the prefix region. Only the model's own continuation — the decisions it made after the prefix — receives gradient signal.</p>
+<p>Why is this essential? Without masking, the prefix would participate in advantage computation even though it comes from an earlier trajectory. That creates an off-policy credit-assignment problem: if the continuation fails, correct prefix actions could receive negative advantage; if the continuation succeeds, incorrect prefix actions could receive positive advantage. In both cases, reward is attributed to decisions the model did not make in the current rollout, which makes RL training noisier and less stable.</p>
+<p>With masking, the training objective remains pure RL: the model is only rewarded or penalized for its own choices, given a particular starting state.</p>
+<h3>Adaptive Prefix (Optional)</h3>
+<p><em>Note: the Qwen3-14B experiments in this post use fixed ratios, while the Qwen3-32B experiments added below enable adaptive prefix.</em></p>
+<p>Fixed ratios work reasonably well, but the optimal prefix length changes as the model improves. A ratio that produces 50% prefix task rollout pass rate at step 10 may produce 80% at step 100 (the model got better at completing from prefixes).</p>
+<p>PS includes an adaptive feedback loop:</p>
+<ol>
+<li><strong>Track per-category prefix task rollout pass rates</strong> using exponential moving averages (EMA, α=0.05, ~13.5-step half-life)</li>
+<li><strong>Adjust ratios</strong> when the EMA leaves a deadzone around the 0.5 target:<br />
+   - If prefix task rollout pass rate &gt; 0.53: increase the ratio (less prefix → harder)<br />
+   - If prefix task rollout pass rate &lt; 0.47: decrease the ratio (more prefix → easier)<br />
+   - Step size: ±0.05 per adjustment</li>
+<li><strong>5-step cooldown</strong> after each adjustment to prevent overshoot from EMA latency</li>
+</ol>
+<p>The cooldown is important: because the EMA is smoothed over multiple steps, a ratio change takes several steps to fully reflect in the metric. Without cooldown, the controller would keep pushing in the same direction, overshooting the target.</p>
+<h2>Results: Faster Training by Targeting 50%</h2>
+<p>We compare Prefix Sampling against a baseline on identical infrastructure and hyperparameters. The baseline follows the <a href="https://www.together.ai/blog/deepswe">DeepSWE</a> training setup — a state-of-the-art RL approach for training coding agents on SWE-bench that uses GRPO with rejection sampling to filter out all-fail and all-pass tasks.</p>
+<p>Across the experiments reported here, the Qwen3-14B and Qwen3-32B setups share the same core recipe: <code>batch_size=64</code>, <code>max_prompt_length=4096</code>, <code>8</code> rollouts per task, training on <code>R2E_Gym_Subset</code>, and evaluation on <code>SWE_Bench_Verified_0726</code>. The main differences are <code>max_response_length</code> (<code>32768</code> for 14B vs <code>65536</code> for 32B), <code>agent.max_steps</code> (<code>50</code> vs <code>100</code>), and prefix control (<code>fixed ratios</code> for 14B vs <code>adaptive prefix</code> for 32B).</p>
+<h3>Experiment Setup</h3>
+<h4>Qwen3-14B</h4>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>Baseline</th>
+<th>Prefix Sampling</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Model</td>
+<td>Qwen3-14B</td>
+<td>Qwen3-14B</td>
+</tr>
+<tr>
+<td>Task</td>
+<td>R2E_Gym_Subset</td>
+<td>R2E_Gym_Subset</td>
+</tr>
+<tr>
+<td>Rollouts per task</td>
+<td>8</td>
+<td>8</td>
+</tr>
+<tr>
+<td>Batch size</td>
+<td>64</td>
+<td>64</td>
+</tr>
+<tr>
+<td>Max prompt length</td>
+<td>4096</td>
+<td>4096</td>
+</tr>
+<tr>
+<td>Max response length</td>
+<td>32768</td>
+<td>32768</td>
+</tr>
+<tr>
+<td>Agent max steps</td>
+<td>50</td>
+<td>50</td>
+</tr>
+<tr>
+<td>Rejection sampling</td>
+<td>Yes (0%, 100%)</td>
+<td>Yes (0%, 100%)</td>
+</tr>
+<tr>
+<td>PS thresholds</td>
+<td>—</td>
+<td>low=0.3, high=0.7</td>
+</tr>
+<tr>
+<td>PS control</td>
+<td>—</td>
+<td>fixed ratios</td>
+</tr>
+<tr>
+<td>Too-hard remaining ratio</td>
+<td>—</td>
+<td>0.25</td>
+</tr>
+<tr>
+<td>Too-easy prefix ratio</td>
+<td>—</td>
+<td>0.25</td>
+</tr>
+</tbody>
+</table>
+<h4>Qwen3-32B</h4>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>Baseline</th>
+<th>Prefix Sampling</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Model</td>
+<td>Qwen3-32B</td>
+<td>Qwen3-32B</td>
+</tr>
+<tr>
+<td>Task</td>
+<td>R2E_Gym_Subset</td>
+<td>R2E_Gym_Subset</td>
+</tr>
+<tr>
+<td>Rollouts per task</td>
+<td>8</td>
+<td>8</td>
+</tr>
+<tr>
+<td>Batch size</td>
+<td>64</td>
+<td>64</td>
+</tr>
+<tr>
+<td>Max prompt length</td>
+<td>4096</td>
+<td>4096</td>
+</tr>
+<tr>
+<td>Max response length</td>
+<td>65536</td>
+<td>65536</td>
+</tr>
+<tr>
+<td>Agent max steps</td>
+<td>100</td>
+<td>100</td>
+</tr>
+<tr>
+<td>Rejection sampling</td>
+<td>Yes (0%, 100%)</td>
+<td>Yes (0%, 100%)</td>
+</tr>
+<tr>
+<td>PS thresholds</td>
+<td>—</td>
+<td>low=0.3, high=0.7</td>
+</tr>
+<tr>
+<td>PS control</td>
+<td>—</td>
+<td>adaptive prefix</td>
+</tr>
+<tr>
+<td>Initial too-hard remaining ratio</td>
+<td>—</td>
+<td>0.25</td>
+</tr>
+<tr>
+<td>Initial too-easy prefix ratio</td>
+<td>—</td>
+<td>0.25</td>
+</tr>
+</tbody>
+</table>
+<h3>Training Efficiency: Faster Convergence and Lower Cost</h3>
+<div style="display: flex; gap: 16px; margin-bottom: 12px;">
+  <a class="zoomable-image" href="figures/pass_rate_comparison.png" style="width: 50%;"><img src="figures/pass_rate_comparison.png" alt="Qwen3-14B Training Score Comparison"></a>
+  <a class="zoomable-image" href="figures/step_time_comparison.png" style="width: 50%;"><img src="figures/step_time_comparison.png" alt="Qwen3-14B Step Time Comparison"></a>
+</div>
+<div style="display: flex; gap: 16px;">
+  <a class="zoomable-image" href="figures/pass_rate_comparison_qwen32b.png" style="width: 50%;"><img src="figures/pass_rate_comparison_qwen32b.png" alt="Qwen3-32B Training Score Comparison"></a>
+  <a class="zoomable-image" href="figures/step_time_comparison_qwen32b.png" style="width: 50%;"><img src="figures/step_time_comparison_qwen32b.png" alt="Qwen3-32B Step Time Comparison"></a>
+</div>
+
+<p><em>Figure 3. Top row: Qwen3-14B. Left: training rollout pass rate on no-prefix tasks over steps. The horizontal line marks the baseline's convergence score; PS matches it 1.55x faster and keeps improving. Right: average wall-clock time per training step (<code>1398s</code> vs <code>1601s</code>). Bottom row: Qwen3-32B. Left: training score comparison; PS reaches the baseline-equivalent score at step <code>282</code> vs <code>395</code>. Right: average wall-clock time per training step (<code>2150s</code> vs <code>2358s</code>).</em></p>
+<p>The pattern is consistent across both model sizes. On Qwen3-14B, PS matches the baseline convergence level in <strong>201</strong> steps versus <strong>312</strong>, a <strong>1.55x step-efficiency improvement</strong>, and also runs <strong>~1.15x faster per step</strong>, yielding <strong>~1.78x end-to-end speedup</strong>. On Qwen3-32B, PS reaches the baseline-equivalent training score at <strong>step 282</strong> versus <strong>395</strong>, a <strong>1.40x step-efficiency improvement</strong>, while also running <strong>~1.10x faster per step</strong>. That translates to roughly <strong>~1.54x end-to-end speedup</strong> to the same training-score threshold.</p>
+<p>The per-step speedup comes from the same mechanism. Prefix replay restores the environment from an intermediate state and reuses an existing trajectory prefix, so that portion of the rollout no longer needs fresh LLM generation. Those replayed prefix steps are mostly deterministic environment transitions rather than new decoding work, and the generation savings are large enough to outweigh the queueing and bookkeeping overhead introduced by Prefix Sampling.</p>
+<h3>Higher Quality and Quantity Training Samples</h3>
+<div style="display: flex; gap: 16px; margin-bottom: 12px;">
+  <a class="zoomable-image" href="figures/rerollout_pass_rate.png" style="width: 50%;"><img src="figures/rerollout_pass_rate.png" alt="Qwen3-14B Prefix Task Pass Rate"></a>
+  <a class="zoomable-image" href="figures/valid_samples_comparison.png" style="width: 50%;"><img src="figures/valid_samples_comparison.png" alt="Qwen3-14B Valid Samples Comparison"></a>
+</div>
+<div style="display: flex; gap: 16px;">
+  <a class="zoomable-image" href="figures/rerollout_pass_rate_qwen32b.png" style="width: 50%;"><img src="figures/rerollout_pass_rate_qwen32b.png" alt="Qwen3-32B Prefix Task Pass Rate"></a>
+  <a class="zoomable-image" href="figures/valid_samples_comparison_qwen32b.png" style="width: 50%;"><img src="figures/valid_samples_comparison_qwen32b.png" alt="Qwen3-32B Valid Samples Comparison"></a>
+</div>
+
+<p><em>Figure 4. Top row: Qwen3-14B. Left: rollout pass rate on prefix tasks only (target: <code>0.5</code>), with mean <code>0.529</code> and std <code>0.078</code>. Right: number of valid training tasks per batch (<code>solve_partial</code>), increasing from <code>25.9</code> to <code>36.5</code>. Bottom row: Qwen3-32B. Left: prefix-task rollout pass rate under adaptive prefix control, staying near the <code>0.5</code> target. Right: valid training tasks per batch, increasing from <code>30.8</code> to <code>39.0</code>.</em></p>
+<p>The efficiency gains come from converting weak, skewed training signal into balanced, information-rich signal. On Qwen3-14B, prefix-task rollout pass rate stays near the 0.5 target throughout training, and PS increases the number of valid training tasks per batch from <strong>25.9</strong> to <strong>36.5</strong>, a <strong>41% increase</strong>. On Qwen3-32B, the same mechanism holds under adaptive prefix control: prefix-task rollout pass rate remains centered near <strong>0.5</strong>, while valid training tasks per batch increase from <strong>30.8</strong> to <strong>39.0</strong>, or <strong>1.27x more</strong> useful tasks per step. In both cases, PS improves both the quantity and the information density of the training data.</p>
+<h3>Higher Entropy, Better Exploration</h3>
+<div style="display: flex; gap: 16px; align-items: flex-start;">
+  <a class="zoomable-image" href="figures/entropy_comparison.png" style="width: 50%;"><img src="figures/entropy_comparison.png" alt="Qwen3-14B Entropy Comparison"></a>
+  <a class="zoomable-image" href="figures/entropy_comparison_qwen32b.png" style="width: 50%;"><img src="figures/entropy_comparison_qwen32b.png" alt="Qwen3-32B Entropy Comparison"></a>
+</div>
+
+<p><em>Figure 5. Left: Qwen3-14B output entropy over training steps; PS maintains higher entropy than the baseline before convergence, with convergence markers at steps <code>201</code> and <code>312</code>. Right: Qwen3-32B output entropy over training steps; PS again maintains higher pre-convergence entropy, with convergence markers at steps <code>282</code> and <code>395</code>.</em></p>
+<p>Entropy tells the same story on both models: PS maintains higher entropy through most of the pre-convergence phase, which supports healthier exploration without causing premature collapse. On both Qwen3-14B and Qwen3-32B, the entropy curves later approach similar levels, indicating that PS reaches the same eventual regime while exploring more effectively along the way.</p>
+<h2>Takeaways</h2>
+<p>The key insight: <strong>50% rollout pass rate maximizes gradient signal</strong> for binary-reward RL. Prefix Sampling operationalizes this — replaying trajectory prefixes to steer skewed tasks toward that target, converting low-quality biased signal into balanced, high-information signal.<br />
+The core mechanism is simple: for skewed tasks, replay trajectory prefixes to push effective rollout pass rate toward 50%, where binary feedback carries maximum information and contrastive credit assignment is strongest.<br />
+PS does not try to rescue completely unsolvable or trivially solved tasks; those are still discarded.<br />
+Instead, it targets the large middle ground of tasks that already produce gradient signal, but do so inefficiently.</p>
+<p><strong>Main contributions:</strong></p>
+<ol>
+<li><strong>Bidirectional prefix mechanism</strong> handles both too-hard tasks (with successful prefixes) and too-easy tasks (with failing prefixes), converting biased signal from both extremes into balanced 50% rollout pass rate samples.</li>
+<li><strong>Prefix replay for agentic RL</strong> restores full environment state (code edits, conversation history, execution context) from saved trajectories, enabling true multi-turn agent continuation.</li>
+<li><strong>Adaptive prefix control</strong> automatically recalibrates prefix length as the model improves, maintaining the 50% target without manual tuning.</li>
+<li><strong>Dynamic on-policy prefix</strong> uses the latest model's self-generated trajectories from the current step, ensuring prefix tasks always reflect the model's current capabilities and avoiding off-policy staleness.</li>
+</ol>
+<p>Our experiments now cover both configurations: a <strong>fixed-ratio Qwen3-14B</strong> setup and an <strong>adaptive-prefix Qwen3-32B</strong> setup. On Qwen3-14B, PS delivers <strong>1.55x better step-efficiency</strong> and <strong>~1.15x faster wall-clock time per step</strong>, for an overall <strong>~1.78x end-to-end speedup</strong>. On Qwen3-32B, PS reaches the same best SWE-bench Verified pass@1 score <strong>1.40x earlier</strong> (<code>290</code> vs <code>410</code>) while also running <strong>~1.10x faster per step</strong>. Together, these results show that Prefix Sampling remains effective both with fixed ratios and with adaptive prefix control.</p>
+<p><strong>Future work:</strong> The current prefix length selection uses fixed ratios or a simple EMA-based adaptive controller. A promising direction is better prefix length selection — for example, learning a model that predicts the optimal prefix length for a given task and current model capability, directly targeting 50% prefix task rollout pass rate with fewer adjustment steps and less overshoot.</p>
+<h2>Mathematical Appendix: Why 50% Is Optimal</h2>
+<p>We show from first principles that for binary-reward RL, the most informative regime is a balanced rollout pass rate (<code>p ≈ 0.5</code>).<br />
+We support this from three complementary views: entropy, GRPO advantage variance, and contrastive pair count.</p>
+<p><strong>Reader shortcut (conclusion first):</strong><br />
+- Information (<code>H(p)</code>), GRPO signal strength (<code>p(1-p)</code>), and contrastive structure (<code>k(N-k)</code>) all peak at <code>p=0.5</code>.<br />
+- Skewed tasks (for example <code>1/8</code> or <code>7/8</code>) still train, but with substantially lower sample efficiency.<br />
+- Prefix Sampling improves efficiency by shifting skewed tasks toward this high-signal regime.</p>
+<h4>Perspective 1: Information Theory</h4>
+<p>With binary pass/fail feedback, per-rollout information is bounded by the entropy of a Bernoulli random variable:</p>
+<pre><code>H(p) = -p·log₂(p) - (1-p)·log₂(1-p)
+</code></pre>
+<p>where <code>p</code> is the pass probability for a task.</p>
+<p>Take derivatives:</p>
+<pre><code>dH/dp = -log₂(p) - 1/ln(2) + log₂(1-p) + 1/ln(2) = log₂((1-p)/p)
+</code></pre>
+<p>Set <code>dH/dp = 0</code>:</p>
+<pre><code>log₂((1-p)/p) = 0  →  (1-p)/p = 1  →  p = 0.5
+</code></pre>
+<p>Second derivative:</p>
+<pre><code>d²H/dp² = -1/(p·ln2) - 1/((1-p)·ln2) &lt; 0  for all p ∈ (0, 1)
+</code></pre>
+<p>So <code>H(p)</code> is uniquely maximized at <code>p = 0.5</code>, with <code>H(0.5)=1</code> bit (the binary maximum), while <code>H(0)=H(1)=0</code>.<br />
+Concrete scale: <code>H(0.1)≈0.47</code>, <code>H(0.01)≈0.08</code>.<br />
+Implication: skewed rollout pass rates waste information per rollout.</p>
+<h4>Perspective 2: GRPO Gradient Signal Strength</h4>
+<p>Entropy quantifies available information; GRPO variance quantifies update strength.<br />
+For a task with <code>N</code> rollouts, rewards <code>rᵢ ∈ {0,1}</code>, <code>k</code> passes, and <code>p = k/N</code>, mean-centered advantage is:</p>
+<pre><code>Aᵢ = rᵢ - r̄,  where r̄ = (1/N) Σⱼ rⱼ = k/N
+</code></pre>
+<p>Hence:</p>
+<pre><code>Passing rollouts (rᵢ = 1):  Aᵢ = 1 - k/N = (N-k)/N
+Failing rollouts (rᵢ = 0):  Aᵢ = 0 - k/N = -k/N
+</code></pre>
+<p>Policy gradient:</p>
+<pre><code>∇J ∝ Σᵢ Aᵢ · ∇log π(τᵢ)
+</code></pre>
+<p>Signal strength is tied to advantage variance:</p>
+<pre><code>Var(A) = E[A²] - E[A]²
+</code></pre>
+<p>Since <code>E[A]=0</code>, compute <code>E[A²]</code>:</p>
+<pre><code>E[A²] = p·(1-p)² + (1-p)·p² = p(1-p)·[(1-p) + p] = p(1-p)
+</code></pre>
+<p>Therefore:</p>
+<pre><code>Var(A) = p(1-p)
+</code></pre>
+<p>Maximization:</p>
+<pre><code>d[p(1-p)]/dp = 1 - 2p = 0  →  p = 0.5
+d²[p(1-p)]/dp² = -2 &lt; 0  (confirmed maximum)
+</code></pre>
+<p>So <code>Var(A)</code> is maximized at <code>p=0.5</code> with value <code>0.25</code>.<br />
+Reference points: <code>Var(0.1)=0.09</code>, <code>Var(0.01)=0.0099</code>, and for <code>p=1/8</code>, <code>Var=0.109</code>.<br />
+Implication: as rollout pass rate becomes skewed, GRPO contrast weakens sharply.</p>
+<h4>Why This Also Maximizes Credit Assignment</h4>
+<p>Balanced rollout pass rates also maximize credit-assignment opportunities.<br />
+With <code>N</code> rollouts and <code>k</code> successes, the number of success-failure contrastive pairs is:</p>
+<pre><code>C(k) = k × (N - k)
+</code></pre>
+<p>Complete the square:</p>
+<pre><code>C(k) = k(N-k) = -(k - N/2)² + N²/4
+</code></pre>
+<p>This is a downward parabola with vertex at <code>k = N/2</code> (equivalently <code>p=0.5</code>). For <code>N=8</code>:</p>
+<table>
+<thead>
+<tr>
+<th>k (passes)</th>
+<th>Pass rate</th>
+<th>C(k) = k(8-k)</th>
+<th>Contrastive pairs</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0</td>
+<td>0%</td>
+<td>0</td>
+<td>No positive examples</td>
+</tr>
+<tr>
+<td>1</td>
+<td>12.5%</td>
+<td>7</td>
+<td>Limited contrast</td>
+</tr>
+<tr>
+<td>2</td>
+<td>25%</td>
+<td>12</td>
+<td>Better but skewed</td>
+</tr>
+<tr>
+<td>4</td>
+<td>50%</td>
+<td>16</td>
+<td><strong>Maximum contrast</strong></td>
+</tr>
+<tr>
+<td>7</td>
+<td>87.5%</td>
+<td>7</td>
+<td>Symmetric to k=1</td>
+</tr>
+<tr>
+<td>8</td>
+<td>100%</td>
+<td>0</td>
+<td>No negative examples</td>
+</tr>
+</tbody>
+</table>
+<p>At <code>k=4</code>, there are 16 pairs, more than 2x the 7 pairs at <code>k=1</code>.<br />
+Implication: balanced rollout pass rates provide the richest structure for step-level credit assignment.</p>
+<h4>Summary</h4>
+<p>All three objectives peak at balance: entropy <code>H(p)</code>, GRPO variance <code>p(1-p)</code>, and contrastive pairs <code>k(N-k)</code> are all maximized at <code>p=0.5</code>.<br />
+So the training target is not just “nonzero rollout pass rate,” but “maximally informative rollout pass rate.” Prefix Sampling uses replayed prefixes to move skewed tasks toward that regime.</p>
+<h2>Citation</h2>
+<pre><code class="language-bibtex">@misc{zhu2026prefixsampling,
+  title = {Prefix Sampling: Targeting 50% Rollout Pass Rate for More Efficient Agentic RL},
+  url = {https://baidubce.github.io/blogs/qianfan/prefix-sampling/},
+  author = {Tianshu Zhu and Wenyu Zhang and Lun Tian and Haotian Zhao and Haifeng Zhang and Ruijie Xu and Yuxin Zhang and Jingnan Gu and Daxiang Dong and Jianmin Wu},
+  year = {2026},
+  month = {Mar},
+}
+</code></pre>
+<p>🫡 We appreciate you reading. We’re continuing to improve this work and would love to hear your feedback.</p>
+  </div>
+</section>
+<div class="image-modal" id="image-modal">
+  <span class="image-modal-close" id="image-modal-close">&times;</span>
+  <div class="image-modal-content">
+    <img id="image-modal-img" src="" alt="Enlarged image">
+  </div>
+</div>
+<div class="site-footer">Baidu AI Cloud Qianfan</div>
+
+    </div>
+  </main>
+  <script>
+    (function () {
+      const modal = document.getElementById('image-modal');
+      const modalImage = document.getElementById('image-modal-img');
+      const closeButton = document.getElementById('image-modal-close');
+      const article = document.querySelector('.article');
+      const tocContainer = document.getElementById('article-toc');
+
+      const slugify = (text, fallback) => {
+        const base = text
+          .toLowerCase()
+          .replace(/[^a-z0-9\u4e00-\u9fa5\s-]/g, '')
+          .trim()
+          .replace(/\s+/g, '-');
+        return base || fallback;
+      };
+
+      const headings = Array.from(article.querySelectorAll('h2, h3, h4'));
+      if (headings.length > 0 && tocContainer) {
+        const ensureId = (heading, index) => {
+          if (!heading.id) {
+            heading.id = slugify(heading.textContent, `section-${index + 1}`);
+          }
+        };
+
+        const groups = [];
+        let currentH2 = null;
+        let currentH3Block = null;
+        let h2Index = 0;
+        let h3Index = 0;
+
+        headings.forEach((heading, index) => {
+          ensureId(heading, index);
+          const level = heading.tagName.toLowerCase();
+
+          if (level === 'h2') {
+            h2Index += 1;
+            h3Index = 0;
+            currentH2 = { heading, number: `${h2Index}.`, children: [] };
+            groups.push(currentH2);
+            currentH3Block = null;
+            return;
+          }
+
+          if (!currentH2) {
+            h2Index += 1;
+            currentH2 = { heading, number: `${h2Index}.`, children: [] };
+            groups.push(currentH2);
+          }
+
+          if (level === 'h3') {
+            h3Index += 1;
+            currentH3Block = { heading, number: `${h2Index}.${h3Index}`, children: [] };
+            currentH2.children.push(currentH3Block);
+            return;
+          }
+
+          if (!currentH3Block) {
+            h3Index += 1;
+            currentH3Block = { heading: null, number: `${h2Index}.${h3Index}`, children: [] };
+            currentH2.children.push(currentH3Block);
+          }
+          currentH3Block.children.push(heading);
+        });
+
+        const grid = document.createElement('div');
+        grid.style.cssText = 'display: flex; flex-wrap: wrap; gap: 2rem; font-size: 0.9rem; line-height: 1.6;';
+
+        const columns = [document.createElement('div'), document.createElement('div')];
+        columns.forEach((column) => {
+          column.style.cssText = 'flex: 1; min-width: 280px;';
+          grid.appendChild(column);
+        });
+
+        const splitIndex = Math.ceil(groups.length / 2);
+
+        const buildLink = (heading, style, prefix = '') => {
+          const link = document.createElement('a');
+          link.href = `#${heading.id}`;
+          link.textContent = `${prefix}${heading.textContent}`;
+          link.style.cssText = style;
+          return link;
+        };
+
+        groups.forEach((group, index) => {
+          const column = columns[index < splitIndex ? 0 : 1];
+          const block = document.createElement('div');
+          block.style.cssText = 'margin-bottom: 0.8rem;';
+
+          const strong = document.createElement('strong');
+          strong.appendChild(buildLink(group.heading, 'color: var(--text-primary);', `${group.number} `));
+          block.appendChild(strong);
+
+          if (group.children.length > 0) {
+            const childWrap = document.createElement('div');
+            childWrap.style.cssText = 'margin-left: 1rem; margin-top: 0.3rem; color: #666;';
+
+            group.children.forEach((child) => {
+              if (child.heading) {
+                childWrap.appendChild(buildLink(child.heading, 'color: inherit; text-decoration: none;', `${child.number} `));
+                childWrap.appendChild(document.createElement('br'));
+              }
+
+              if (child.children && child.children.length > 0) {
+                const grandWrap = document.createElement('div');
+                grandWrap.style.cssText = 'margin-left: 1rem; font-size: 0.85rem;';
+                child.children.forEach((grand) => {
+                  const grandLink = buildLink(grand, 'color: inherit; text-decoration: none;');
+                  grandLink.textContent = `• ${grand.textContent}`;
+                  grandWrap.appendChild(grandLink);
+                  grandWrap.appendChild(document.createElement('br'));
+                });
+                childWrap.appendChild(grandWrap);
+              }
+            });
+
+            while (childWrap.lastChild && childWrap.lastChild.tagName === 'BR') {
+              childWrap.removeChild(childWrap.lastChild);
+            }
+            block.appendChild(childWrap);
+          }
+
+          column.appendChild(block);
+        });
+
+        tocContainer.appendChild(grid);
+      }
+
+      article.addEventListener('click', (event) => {
+        const image = event.target.closest('img');
+        if (!image || !article.contains(image)) {
+          return;
+        }
+
+        event.preventDefault();
+        const imageLink = image.closest('a');
+        const fullImageUrl = imageLink?.getAttribute('href') || image.src;
+        modalImage.src = fullImageUrl;
+        modalImage.alt = image.alt || 'Enlarged image';
+        modal.style.display = 'block';
+      });
+
+      closeButton.addEventListener('click', () => {
+        modal.style.display = 'none';
+      });
+
+      modal.addEventListener('click', (event) => {
+        if (event.target === modal) {
+          modal.style.display = 'none';
+        }
+      });
+
+      document.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape') {
+          modal.style.display = 'none';
+        }
+      });
+    })();
+  </script>
+</body>
+</html>
