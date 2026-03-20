@@ -1186,6 +1186,13 @@ html {
 .article :not(pre) > code { background: #f2f4f7; padding: .1rem .35rem; border-radius: 4px; }
 .article table { width: 100%; border-collapse: collapse; margin: 1rem 0; }
 .article th, .article td { border: 1px solid #d9d9d9; padding: .65rem .8rem; }
+.article table.experiment-table { table-layout: fixed; }
+.article table.experiment-table th:nth-child(1),
+.article table.experiment-table td:nth-child(1) { width: 38%; }
+.article table.experiment-table th:nth-child(2),
+.article table.experiment-table td:nth-child(2),
+.article table.experiment-table th:nth-child(3),
+.article table.experiment-table td:nth-child(3) { width: 31%; }
 .zoomable-image { display: inline-block; cursor: zoom-in; }
 .zoomable-image img { width: 100%; max-width: 100%; height: auto; display: block; }
 .article img { max-width: 100%; height: auto; cursor: zoom-in; }

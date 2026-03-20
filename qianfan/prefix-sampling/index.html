@@ -128,7 +128,7 @@ target_step = total_steps - remaining
 <p>Across the experiments reported here, the Qwen3-14B and Qwen3-32B setups share the same core recipe: <code>batch_size=64</code>, <code>max_prompt_length=4096</code>, <code>8</code> rollouts per task, training on <code>R2E_Gym_Subset</code>, and evaluation on <code>SWE_Bench_Verified_0726</code>. The main differences are <code>max_response_length</code> (<code>32768</code> for 14B vs <code>65536</code> for 32B), <code>agent.max_steps</code> (<code>50</code> vs <code>100</code>), and prefix control (<code>fixed ratios</code> for 14B vs <code>adaptive prefix</code> for 32B).</p>
 <h3>Experiment Setup</h3>
 <h4>Qwen3-14B</h4>
-<table>
+<table class="experiment-table">
 <thead>
 <tr>
 <th></th>
@@ -200,7 +200,7 @@ target_step = total_steps - remaining
 </tbody>
 </table>
 <h4>Qwen3-32B</h4>
-<table>
+<table class="experiment-table">
 <thead>
 <tr>
 <th></th>

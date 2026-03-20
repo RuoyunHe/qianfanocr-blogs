@@ -132,7 +132,7 @@ target_step = total_steps - remaining
 <p>本文涉及的 14B 和 32B 两组实验，共享相同的核心训练配方：<code>batch_size=64</code>、<code>max_prompt_length=4096</code>、每个任务 <code>8</code> 个 rollouts、训练集为 <code>R2E_Gym_Subset</code>、验证集为 <code>SWE_Bench_Verified_0726</code>。二者的主要差异在于 <code>max_response_length</code>（14B 为 <code>32768</code>，32B 为 <code>65536</code>）、<code>agent.max_steps</code>（<code>50</code> vs <code>100</code>），以及 prefix 控制方式（14B 使用 fixed ratios，32B 启用 adaptive prefix）。</p>
 <h3>实验配置</h3>
 <h4>Qwen3-14B</h4>
-<table>
+<table class="experiment-table">
 <thead>
 <tr>
 <th></th>
@@ -204,7 +204,7 @@ target_step = total_steps - remaining
 </tbody>
 </table>
 <h4>Qwen3-32B</h4>
-<table>
+<table class="experiment-table">
 <thead>
 <tr>
 <th></th>
