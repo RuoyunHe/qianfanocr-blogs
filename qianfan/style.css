@@ -1166,6 +1166,8 @@ html {
   min-width: 0;
 }
 .entry-title { font-size: 1.5rem; font-weight: 600; line-height: 1.35; margin-bottom: 0.45rem; color: var(--text-primary); }
+.entry-title a { color: inherit; text-decoration: none; }
+.entry-title a:hover { text-decoration: underline; }
 .entry-desc { color: var(--text-secondary); font-size: 1rem; line-height: 1.6; margin-bottom: 0.55rem; }
 .entry-links { line-height: 1.7; }
 .entry-links a { color: #0056d6; text-decoration: none; }
