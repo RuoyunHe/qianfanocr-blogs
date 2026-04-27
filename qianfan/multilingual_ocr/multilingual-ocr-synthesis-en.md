@@ -9,6 +9,7 @@ The community has explored synthetic data extensively: SynthText [1] pioneered n
 Building on existing synthesis paradigms, our work focuses on two core challenges in multilingual settings: font renderability validation and script-aware differential rendering. Starting from high-quality multilingual plain text, we automatically synthesize images resembling real document scenes through controllable rendering and perturbation modeling, while naturally obtaining precise text-image alignment annotations. Through this pipeline, as presented below, Qianfan-OCR's multilingual capability has been expanded to cover 196 languages.
 
 ```mermaid
+%%{init: {'theme': 'default', 'themeVariables': {'fontSize': '11px'}, 'flowchart': {'nodeSpacing': 25, 'rankSpacing': 35}}}%%
 flowchart TD
     A[("📚 Multilingual Plain Text Corpus\n196 Languages")]
 
@@ -70,7 +71,7 @@ Beyond font coverage, different writing systems cannot be handled by a single un
 
 Together, these two strategies significantly improve the robustness and correctness of the multilingual reverse synthesis pipeline across diverse texts and fonts. Synthesis results across different languages are shown below.
 
-![](images/case_1.png)![](images/case_2.png)![](images/case_3.png)![](images/case_4.png)
+<img src="images/case_1.png" width="24%"/><img src="images/case_2.png" width="24%"/><img src="images/case_3.png" width="24%"/><img src="images/case_4.png" width="24%"/>
 
 ## 2. Visual Diversity for Enhanced Realism
 
@@ -86,15 +87,15 @@ These designs bring the training data closer to real-world document distribution
 
 **Font Diversity**: To help the OCR model learn to recognize characters themselves, rather than memorizing pixel patterns of a specific font, we randomly sample fonts of different styles during synthesis. The figures below show the same Latin text rendered in four different font styles.
 
-![](images/case_5.png)![](images/case_6.png)![](images/case_7.png)![](images/case_8.png)
+<img src="images/case_5.png" width="24%"/><img src="images/case_6.png" width="24%"/><img src="images/case_7.png" width="24%"/><img src="images/case_8.png" width="24%"/>
 
 **Layout Diversity**: Real historical documents come in a wide variety of layouts — single-column, double-column, and open book spreads, among others. To cover these scenarios, we introduce layout randomization during synthesis.
 
-![](images/case_9.png)![](images/case_10.png)![](images/case_11.png)![](images/case_12.png)
+<img src="images/case_9.png" width="24%"/><img src="images/case_10.png" width="24%"/><img src="images/case_11.png" width="24%"/><img src="images/case_12.png" width="24%"/>
 
 **Visual Perturbation**: Real-world document images often carry various forms of visual noise — scanner textures, paper tones, print quality variations, and age-related degradation. To ensure the synthetic data covers these real distributions, we design multi-level visual perturbation.
 
-![](images/case_13.png)![](images/case_14.png)![](images/case_15.png)![](images/case_16.png)
+<img src="images/case_13.png" width="24%"/><img src="images/case_14.png" width="24%"/><img src="images/case_15.png" width="24%"/><img src="images/case_16.png" width="24%"/>
 
 ## Conclusion and Future Work
 
@@ -107,7 +108,7 @@ Looking ahead, this framework can evolve in several directions:
 - Draw from language-specific synthesis approaches such as SARD [7] to migrate and integrate their language-specialized augmentation strategies into the multilingual framework
 - Introduce perspective transforms and lighting perturbations as additional visual augmentations, and explore multi-font mixed rendering and handwriting style synthesis to cover a broader range of application scenarios
 
-Through the paradigm of reverse synthesis with engineered production, it is possible to continuously and cost-effectively scale the data foundation for multilingual OCR, providing support for document intelligence in global deployment scenarios.
+Through the paradigm of reverse synthesis withr engineered production, it is possible to continuously and cost-effectively scale the data foundation for multilingual OCR, providing support for document intelligence in global deployment scenarios.
 
 ## References
 

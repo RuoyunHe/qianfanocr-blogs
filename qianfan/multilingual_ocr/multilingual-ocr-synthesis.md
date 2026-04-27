@@ -9,6 +9,7 @@
 我们的工作在借鉴已有合成范式的基础上，重点解决多语言场景下的字体可渲染性校验与差异化渲染问题，具体流程如下图所示。从高质量多语言纯文本出发，通过可控渲染与扰动建模，自动合成出接近真实文档场景的图像，同时天然得到精确的图文对齐标注。在 Qianfan-OCR 的多语言能力升级中，我们围绕合成数据的正确性和真实性进行优化，最终将模型支持语言范围扩展到了 196 种。
 
 ```mermaid
+%%{init: {'theme': 'default', 'themeVariables': {'fontSize': '11px'}, 'flowchart': {'nodeSpacing': 25, 'rankSpacing': 35}}}%%
 flowchart TD
     A[("📚 多语言纯文本语料\n196 种语言")]
 
@@ -69,7 +70,7 @@ flowchart TD
 - 结合按词宽度测量的自动换行与对齐策略，确保多行文本稳定排布
 
 通过以上两个策略，强化了多语言反向合成 pipeline 面对不同文本和字体的鲁棒性与正确性。对不同语言的合成效果如下图所示。
-![](images/case_1.png)![](images/case_2.png)![](images/case_3.png)![](images/case_4.png)
+<img src="images/case_1.png" width="24%"/><img src="images/case_2.png" width="24%"/><img src="images/case_3.png" width="24%"/><img src="images/case_4.png" width="24%"/>
 
 ## 2. 视觉多样化，增强真实性
 
@@ -84,13 +85,13 @@ flowchart TD
 这些设计让训练数据与业务场景更加贴近，增强了模型对真实文档结构与版式变化的泛化能力。
 
 **字体多样性展示**：为了让 OCR 模型学到"识别字符本身"而非"记住某种特定字体的像素模式"，我们在合成时随机采样不同风格的字体。下图展示了同一段拉丁文本在四种字体下的渲染效果。
-![](images/case_5.png)![](images/case_6.png)![](images/case_7.png)![](images/case_8.png)
+<img src="images/case_5.png" width="24%"/><img src="images/case_6.png" width="24%"/><img src="images/case_7.png" width="24%"/><img src="images/case_8.png" width="24%"/>
 
 **版面多样性展示**：真实历史文档的版面形式多样——有单栏、有双栏，也有摊开的书页。为了覆盖这些场景，我们在合成阶段引入了版式随机化。
-![](images/case_9.png)![](images/case_10.png)![](images/case_11.png)![](images/case_12.png)
+<img src="images/case_9.png" width="24%"/><img src="images/case_10.png" width="24%"/><img src="images/case_11.png" width="24%"/><img src="images/case_12.png" width="24%"/>
 
 **视觉扰动展示**：真实场景中的文档图像往往带有各种视觉噪声——扫描仪的纹理、纸张的底色、打印质量的差异、历史的侵蚀等。为了让合成数据覆盖这些真实分布，我们设计了多级视觉扰动。
-![](images/case_13.png)![](images/case_14.png)![](images/case_15.png)![](images/case_16.png)
+<img src="images/case_13.png" width="24%"/><img src="images/case_14.png" width="24%"/><img src="images/case_15.png" width="24%"/><img src="images/case_16.png" width="24%"/>
 
 ## 总结与展望
 
